@@ -14,7 +14,135 @@ export type Database = {
   }
   public: {
     Tables: {
-      [_ in never]: never
+      chats: {
+        Row: {
+          created_at: string
+          id: string
+          title: string
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          title?: string
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          title?: string
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "chats_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "vault_users"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      messages: {
+        Row: {
+          chat_id: string
+          content: string
+          created_at: string
+          id: string
+          image_url: string | null
+          role: string
+        }
+        Insert: {
+          chat_id: string
+          content?: string
+          created_at?: string
+          id?: string
+          image_url?: string | null
+          role: string
+        }
+        Update: {
+          chat_id?: string
+          content?: string
+          created_at?: string
+          id?: string
+          image_url?: string | null
+          role?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "messages_chat_id_fkey"
+            columns: ["chat_id"]
+            isOneToOne: false
+            referencedRelation: "chats"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      vault_files: {
+        Row: {
+          created_at: string
+          id: string
+          mime_type: string
+          name: string
+          size_bytes: number
+          storage_path: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          mime_type?: string
+          name: string
+          size_bytes?: number
+          storage_path: string
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          mime_type?: string
+          name?: string
+          size_bytes?: number
+          storage_path?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "vault_files_user_id_fkey"
+            columns: ["user_id"]
+            isOneToOne: false
+            referencedRelation: "vault_users"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      vault_users: {
+        Row: {
+          created_at: string
+          id: string
+          language: string
+          pin_hash: string | null
+          recovery_key: string
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          language?: string
+          pin_hash?: string | null
+          recovery_key: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          language?: string
+          pin_hash?: string | null
+          recovery_key?: string
+        }
+        Relationships: []
+      }
     }
     Views: {
       [_ in never]: never
