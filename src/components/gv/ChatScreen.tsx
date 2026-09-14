@@ -5,6 +5,8 @@ import {
   Globe,
   Image as ImageIcon,
   Keyboard,
+  Lock,
+  Menu,
   Loader2,
   Mic,
   MicOff,
@@ -13,7 +15,6 @@ import {
   Sparkle,
   SquarePlay,
   Trash2,
-  Video,
   X,
 } from "lucide-react";
 import { toast } from "sonner";
@@ -272,7 +273,7 @@ export function ChatScreen({
     <div className="flex min-h-dvh flex-col">
       <header className="sticky top-0 z-20 flex items-center gap-1 border-b border-border bg-background/90 px-2 py-2.5 backdrop-blur">
         <button onClick={() => setDrawerOpen(true)} className="rounded-full p-2 hover:bg-secondary">
-          <Plus className="size-5 rotate-45" />
+          <Menu className="size-5" />
         </button>
         <div className="relative flex-1">
           <button
@@ -499,7 +500,7 @@ export function ChatScreen({
               onClick={onVaultCommand}
               className="mt-4 flex w-full items-center gap-2 rounded-2xl px-3 py-2.5 text-sm text-muted-foreground hover:bg-secondary"
             >
-              <Video className="size-4" /> Personal Vault
+              <Lock className="size-4" /> Personal Vault
             </button>
             <button
               onClick={onSignOut}
