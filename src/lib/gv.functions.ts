@@ -3,11 +3,16 @@ import { z } from "zod";
 
 import {
   chatComplete,
-  generateImageDataUrl,
+  createVideoJob,
+  generateImageBytes,
   generateRecoveryKey,
   getAdmin,
   hash,
   normalizeKey,
+  pollVideoJob,
+  signMedia,
+  storeGenerated,
+  transcribeAudio,
 } from "./gv.server";
 
 const keySchema = z.string().min(4);
@@ -124,7 +129,12 @@ export const listMessages = createServerFn({ method: "POST" })
       .eq("chat_id", data.chatId)
       .order("created_at", { ascending: true });
     if (error) throw new Error(error.message);
-    return rows ?? [];
+    return Promise.all(
+      (rows ?? []).map(async (row) => ({
+        ...row,
+        image_url: await signMedia(row.image_url as string | null),
+      })),
+    );
   });
 
 export const deleteChat = createServerFn({ method: "POST" })
@@ -145,6 +155,11 @@ export const sendMessage = createServerFn({ method: "POST" })
         text: z.string().min(1).max(8000),
         model: z.enum(["flash", "pro"]),
         language: z.enum(["auto", "bn", "en"]),
+        apiKey: z.string().min(10).max(200).nullable().optional(),
+        attachment: z
+          .object({ mimeType: z.string().min(1).max(120), base64: z.string().min(4) })
+          .nullable()
+          .optional(),
       })
       .parse(d),
   )
@@ -186,6 +201,7 @@ export const sendMessage = createServerFn({ method: "POST" })
         .map((m) => ({ role: m.role as string, content: m.content as string })),
       data.model,
       data.language,
+      { apiKey: data.apiKey ?? null, attachment: data.attachment ?? undefined },
     );
 
     const { data: saved } = await admin
@@ -228,7 +244,8 @@ export const generateImage = createServerFn({ method: "POST" })
       .from("messages")
       .insert({ chat_id: chatId, role: "user", content: `🖼️ ${data.prompt}` });
 
-    const imageUrl = await generateImageDataUrl(data.prompt);
+    const bytes = await generateImageBytes(data.prompt);
+    const ref = await storeGenerated(account.id, bytes, "png", "image/png");
 
     const { data: saved } = await admin
       .from("messages")
@@ -236,15 +253,17 @@ export const generateImage = createServerFn({ method: "POST" })
         chat_id: chatId,
         role: "assistant",
         content: "Here is your generated image.",
-        image_url: imageUrl,
+        image_url: ref,
       })
       .select("id, role, content, image_url, created_at")
       .maybeSingle();
 
     await admin.from("chats").update({ updated_at: new Date().toISOString() }).eq("id", chatId);
 
-    void account;
-    return { chatId, message: saved };
+    return {
+      chatId,
+      message: saved ? { ...saved, image_url: await signMedia(saved.image_url as string | null) } : null,
+    };
   });
 
 /* ---------------- Vault ---------------- */
