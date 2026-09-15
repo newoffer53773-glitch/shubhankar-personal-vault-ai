@@ -101,7 +101,7 @@ export async function chatComplete(
   messages: Array<{ role: string; content: string }>,
   model: ModelChoice,
   language: string,
-  options?: { apiKey?: string | null; attachment?: Attachment },
+  options?: { apiKey?: string | null; attachment?: Attachment | undefined },
 ): Promise<string> {
   if (options?.apiKey) {
     return geminiComplete(options.apiKey, messages, model, language, options.attachment);
@@ -268,7 +268,7 @@ export async function createVideoJob(prompt: string): Promise<string> {
 
 export async function pollVideoJob(
   id: string,
-): Promise<{ status: string; bytes?: Uint8Array; error?: string }> {
+): Promise<{ status: string; bytes?: Uint8Array; error?: string | undefined }> {
   const res = await fetch(`https://ai.gateway.lovable.dev/v1/videos/${id}`, {
     headers: aiHeaders(),
   });
