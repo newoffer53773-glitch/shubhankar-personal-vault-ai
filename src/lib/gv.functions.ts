@@ -3,11 +3,16 @@ import { z } from "zod";
 
 import {
   chatComplete,
-  generateImageDataUrl,
+  createVideoJob,
+  generateImageBytes,
   generateRecoveryKey,
   getAdmin,
   hash,
   normalizeKey,
+  pollVideoJob,
+  signMedia,
+  storeGenerated,
+  transcribeAudio,
 } from "./gv.server";
 
 const keySchema = z.string().min(4);
@@ -124,7 +129,12 @@ export const listMessages = createServerFn({ method: "POST" })
       .eq("chat_id", data.chatId)
       .order("created_at", { ascending: true });
     if (error) throw new Error(error.message);
-    return rows ?? [];
+    return Promise.all(
+      (rows ?? []).map(async (row) => ({
+        ...row,
+        image_url: await signMedia(row.image_url as string | null),
+      })),
+    );
   });
 
 export const deleteChat = createServerFn({ method: "POST" })
@@ -145,6 +155,11 @@ export const sendMessage = createServerFn({ method: "POST" })
         text: z.string().min(1).max(8000),
         model: z.enum(["flash", "pro"]),
         language: z.enum(["auto", "bn", "en"]),
+        apiKey: z.string().min(10).max(200).nullable().optional(),
+        attachment: z
+          .object({ mimeType: z.string().min(1).max(120), base64: z.string().min(4) })
+          .nullable()
+          .optional(),
       })
       .parse(d),
   )
@@ -186,6 +201,7 @@ export const sendMessage = createServerFn({ method: "POST" })
         .map((m) => ({ role: m.role as string, content: m.content as string })),
       data.model,
       data.language,
+      { apiKey: data.apiKey ?? null, attachment: data.attachment ?? undefined },
     );
 
     const { data: saved } = await admin
@@ -228,7 +244,8 @@ export const generateImage = createServerFn({ method: "POST" })
       .from("messages")
       .insert({ chat_id: chatId, role: "user", content: `🖼️ ${data.prompt}` });
 
-    const imageUrl = await generateImageDataUrl(data.prompt);
+    const bytes = await generateImageBytes(data.prompt);
+    const ref = await storeGenerated(account.id, bytes, "png", "image/png");
 
     const { data: saved } = await admin
       .from("messages")
@@ -236,15 +253,17 @@ export const generateImage = createServerFn({ method: "POST" })
         chat_id: chatId,
         role: "assistant",
         content: "Here is your generated image.",
-        image_url: imageUrl,
+        image_url: ref,
       })
       .select("id, role, content, image_url, created_at")
       .maybeSingle();
 
     await admin.from("chats").update({ updated_at: new Date().toISOString() }).eq("id", chatId);
 
-    void account;
-    return { chatId, message: saved };
+    return {
+      chatId,
+      message: saved ? { ...saved, image_url: await signMedia(saved.image_url as string | null) } : null,
+    };
   });
 
 /* ---------------- Vault ---------------- */
@@ -371,5 +390,158 @@ export const deleteVaultFile = createServerFn({ method: "POST" })
     if (!row) throw new Error("File not found.");
     await admin.storage.from("vault").remove([row.storage_path as string]);
     await admin.from("vault_files").delete().eq("id", data.fileId).eq("user_id", account.id);
+    return { ok: true };
+  });
+
+/* ---------------- Video generation ---------------- */
+
+export const startVideoGeneration = createServerFn({ method: "POST" })
+  .inputValidator((d: unknown) =>
+    z
+      .object({
+        recoveryKey: keySchema,
+        chatId: z.string().uuid().nullable(),
+        prompt: z.string().min(2).max(1000),
+      })
+      .parse(d),
+  )
+  .handler(async ({ data }) => {
+    const account = await requireAccount(data.recoveryKey);
+    const admin = await getAdmin();
+
+    let chatId = data.chatId;
+    if (!chatId) {
+      const { data: chat, error } = await admin
+        .from("chats")
+        .insert({ user_id: account.id, title: `Video: ${data.prompt.slice(0, 40)}` })
+        .select("id")
+        .maybeSingle();
+      if (error || !chat) throw new Error(error?.message ?? "Could not start a chat.");
+      chatId = chat.id as string;
+    }
+
+    await admin.from("messages").insert({ chat_id: chatId, role: "user", content: `🎬 ${data.prompt}` });
+    const jobId = await createVideoJob(data.prompt);
+    return { chatId, jobId };
+  });
+
+export const checkVideoGeneration = createServerFn({ method: "POST" })
+  .inputValidator((d: unknown) =>
+    z
+      .object({
+        recoveryKey: keySchema,
+        chatId: z.string().uuid(),
+        jobId: z.string().min(4).max(120),
+      })
+      .parse(d),
+  )
+  .handler(async ({ data }) => {
+    const account = await requireAccount(data.recoveryKey);
+    const admin = await getAdmin();
+
+    const job = await pollVideoJob(data.jobId);
+    if (job.status === "failed") throw new Error(job.error ?? "Video generation failed.");
+    if (job.status !== "completed" || !job.bytes) return { status: job.status, message: null };
+
+    const ref = await storeGenerated(account.id, job.bytes, "mp4", "video/mp4");
+    const { data: saved } = await admin
+      .from("messages")
+      .insert({
+        chat_id: data.chatId,
+        role: "assistant",
+        content: "Here is your generated video.",
+        image_url: ref,
+      })
+      .select("id, role, content, image_url, created_at")
+      .maybeSingle();
+    await admin.from("chats").update({ updated_at: new Date().toISOString() }).eq("id", data.chatId);
+
+    return {
+      status: "completed",
+      message: saved ? { ...saved, image_url: await signMedia(saved.image_url as string | null) } : null,
+    };
+  });
+
+/* ---------------- Voice transcription fallback ---------------- */
+
+export const transcribeVoice = createServerFn({ method: "POST" })
+  .inputValidator((d: unknown) =>
+    z
+      .object({
+        recoveryKey: keySchema,
+        mimeType: z.string().min(1).max(120),
+        base64: z.string().min(16),
+      })
+      .parse(d),
+  )
+  .handler(async ({ data }) => {
+    await requireAccount(data.recoveryKey);
+    const text = await transcribeAudio(data.base64, data.mimeType);
+    return { text };
+  });
+
+/* ---------------- Secret notes ---------------- */
+
+export const listVaultNotes = createServerFn({ method: "POST" })
+  .inputValidator((d: unknown) => z.object({ recoveryKey: keySchema, pin: pinSchema }).parse(d))
+  .handler(async ({ data }) => {
+    const account = await requirePin(data.recoveryKey, data.pin);
+    const admin = await getAdmin();
+    const { data: rows, error } = await admin
+      .from("vault_notes")
+      .select("id, title, content, updated_at")
+      .eq("user_id", account.id)
+      .order("updated_at", { ascending: false });
+    if (error) throw new Error(error.message);
+    return rows ?? [];
+  });
+
+export const saveVaultNote = createServerFn({ method: "POST" })
+  .inputValidator((d: unknown) =>
+    z
+      .object({
+        recoveryKey: keySchema,
+        pin: pinSchema,
+        noteId: z.string().uuid().nullable(),
+        title: z.string().max(160),
+        content: z.string().max(40000),
+      })
+      .parse(d),
+  )
+  .handler(async ({ data }) => {
+    const account = await requirePin(data.recoveryKey, data.pin);
+    const admin = await getAdmin();
+    const title = data.title.trim() || "Untitled note";
+
+    if (data.noteId) {
+      const { data: row, error } = await admin
+        .from("vault_notes")
+        .update({ title, content: data.content, updated_at: new Date().toISOString() })
+        .eq("id", data.noteId)
+        .eq("user_id", account.id)
+        .select("id, title, content, updated_at")
+        .maybeSingle();
+      if (error) throw new Error(error.message);
+      if (!row) throw new Error("Note not found.");
+      return row;
+    }
+
+    const { data: row, error } = await admin
+      .from("vault_notes")
+      .insert({ user_id: account.id, title, content: data.content })
+      .select("id, title, content, updated_at")
+      .maybeSingle();
+    if (error) throw new Error(error.message);
+    return row;
+  });
+
+export const deleteVaultNote = createServerFn({ method: "POST" })
+  .inputValidator((d: unknown) =>
+    z.object({ recoveryKey: keySchema, pin: pinSchema, noteId: z.string().uuid() }).parse(d),
+  )
+  .handler(async ({ data }) => {
+    const account = await requirePin(data.recoveryKey, data.pin);
+    const admin = await getAdmin();
+    await admin.from("vault_notes").delete().eq("id", data.noteId).eq("user_id", account.id);
     return { ok: true };
   });
