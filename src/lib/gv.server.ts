@@ -185,3 +185,138 @@ export async function generateImageDataUrl(prompt: string): Promise<string> {
   if (item?.url) return item.url;
   throw new Error("Image generation returned no image.");
 }
+
+/* ---------------- Stored generated media ---------------- */
+
+export async function storeGenerated(
+  accountId: string,
+  bytes: Uint8Array,
+  ext: string,
+  contentType: string,
+): Promise<string> {
+  const admin = await getAdmin();
+  const path = `${accountId}/${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${ext}`;
+  const { error } = await admin.storage.from("generated").upload(path, bytes, { contentType });
+  if (error) throw new Error(error.message);
+  return `generated:${path}`;
+}
+
+export async function signMedia(ref: string | null): Promise<string | null> {
+  if (!ref) return null;
+  if (!ref.startsWith("generated:")) return ref;
+  const admin = await getAdmin();
+  const { data } = await admin.storage
+    .from("generated")
+    .createSignedUrl(ref.slice("generated:".length), 60 * 60 * 6);
+  return data?.signedUrl ?? null;
+}
+
+/* ---------------- Image generation ---------------- */
+
+export async function generateImageBytes(prompt: string): Promise<Uint8Array> {
+  const apiKey = process.env["LOVABLE_API_KEY"];
+  if (!apiKey) throw new Error("AI is not configured.");
+
+  const res = await fetch("https://ai.gateway.lovable.dev/v1/images/generations", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Lovable-API-Key": apiKey },
+    body: JSON.stringify({ model: "lovable/image-fast", prompt, n: 1 }),
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    if (res.status === 402) throw new Error("AI credits are exhausted. Please add credits to continue.");
+    throw new Error(`Image generation failed (${res.status}): ${text.slice(0, 200)}`);
+  }
+  const json = (await res.json()) as { data?: Array<{ b64_json?: string; url?: string }> };
+  const item = json.data?.[0];
+  if (item?.b64_json) return new Uint8Array(Buffer.from(item.b64_json, "base64"));
+  if (item?.url) {
+    const file = await fetch(item.url);
+    return new Uint8Array(await file.arrayBuffer());
+  }
+  throw new Error("Image generation returned no image.");
+}
+
+/* ---------------- Video generation (async job) ---------------- */
+
+function aiHeaders() {
+  const apiKey = process.env["LOVABLE_API_KEY"];
+  if (!apiKey) throw new Error("AI is not configured.");
+  return { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` };
+}
+
+export async function createVideoJob(prompt: string): Promise<string> {
+  const res = await fetch("https://ai.gateway.lovable.dev/v1/videos", {
+    method: "POST",
+    headers: aiHeaders(),
+    body: JSON.stringify({
+      model: "google/gemini-omni-1.1-flash",
+      input: prompt,
+      response_format: { type: "video", resolution: "720p", duration: "6s" },
+    }),
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    if (res.status === 402) throw new Error("AI credits are exhausted. Please add credits to continue.");
+    if (res.status === 429) throw new Error("A video is already generating. Please wait for it to finish.");
+    throw new Error(`Video generation failed (${res.status}): ${text.slice(0, 200)}`);
+  }
+  const job = (await res.json()) as { id?: string };
+  if (!job.id) throw new Error("Video generation did not start.");
+  return job.id;
+}
+
+export async function pollVideoJob(
+  id: string,
+): Promise<{ status: string; bytes?: Uint8Array; error?: string }> {
+  const res = await fetch(`https://ai.gateway.lovable.dev/v1/videos/${id}`, {
+    headers: aiHeaders(),
+  });
+  if (!res.ok) throw new Error(`Could not check the video job (${res.status}).`);
+  const job = (await res.json()) as {
+    status?: string;
+    error?: { message?: string };
+  };
+  if (job.status !== "completed") {
+    return { status: job.status ?? "in_progress", error: job.error?.message };
+  }
+  const content = await fetch(`https://ai.gateway.lovable.dev/v1/videos/${id}/content`, {
+    headers: aiHeaders(),
+  });
+  if (!content.ok) throw new Error("Could not download the generated video.");
+  return { status: "completed", bytes: new Uint8Array(await content.arrayBuffer()) };
+}
+
+/* ---------------- Voice transcription ---------------- */
+
+export async function transcribeAudio(base64: string, mimeType: string): Promise<string> {
+  const apiKey = process.env["LOVABLE_API_KEY"];
+  if (!apiKey) throw new Error("AI is not configured.");
+  const format = mimeType.includes("mp4") ? "m4a" : mimeType.includes("ogg") ? "ogg" : "webm";
+
+  const res = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Lovable-API-Key": apiKey },
+    body: JSON.stringify({
+      model: MODEL_MAP.flash,
+      messages: [
+        {
+          role: "user",
+          content: [
+            {
+              type: "text",
+              text: "Transcribe this recording verbatim. Reply with the transcript text only, no commentary.",
+            },
+            { type: "input_audio", input_audio: { data: base64, format } },
+          ],
+        },
+      ],
+    }),
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`Could not transcribe the recording (${res.status}): ${text.slice(0, 160)}`);
+  }
+  const json = (await res.json()) as { choices?: Array<{ message?: { content?: string } }> };
+  return json.choices?.[0]?.message?.content?.trim() ?? "";
+}
