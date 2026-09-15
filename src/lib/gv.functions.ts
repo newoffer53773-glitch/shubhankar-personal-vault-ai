@@ -392,3 +392,156 @@ export const deleteVaultFile = createServerFn({ method: "POST" })
     await admin.from("vault_files").delete().eq("id", data.fileId).eq("user_id", account.id);
     return { ok: true };
   });
+
+/* ---------------- Video generation ---------------- */
+
+export const startVideoGeneration = createServerFn({ method: "POST" })
+  .inputValidator((d: unknown) =>
+    z
+      .object({
+        recoveryKey: keySchema,
+        chatId: z.string().uuid().nullable(),
+        prompt: z.string().min(2).max(1000),
+      })
+      .parse(d),
+  )
+  .handler(async ({ data }) => {
+    const account = await requireAccount(data.recoveryKey);
+    const admin = await getAdmin();
+
+    let chatId = data.chatId;
+    if (!chatId) {
+      const { data: chat, error } = await admin
+        .from("chats")
+        .insert({ user_id: account.id, title: `Video: ${data.prompt.slice(0, 40)}` })
+        .select("id")
+        .maybeSingle();
+      if (error || !chat) throw new Error(error?.message ?? "Could not start a chat.");
+      chatId = chat.id as string;
+    }
+
+    await admin.from("messages").insert({ chat_id: chatId, role: "user", content: `🎬 ${data.prompt}` });
+    const jobId = await createVideoJob(data.prompt);
+    return { chatId, jobId };
+  });
+
+export const checkVideoGeneration = createServerFn({ method: "POST" })
+  .inputValidator((d: unknown) =>
+    z
+      .object({
+        recoveryKey: keySchema,
+        chatId: z.string().uuid(),
+        jobId: z.string().min(4).max(120),
+      })
+      .parse(d),
+  )
+  .handler(async ({ data }) => {
+    const account = await requireAccount(data.recoveryKey);
+    const admin = await getAdmin();
+
+    const job = await pollVideoJob(data.jobId);
+    if (job.status === "failed") throw new Error(job.error ?? "Video generation failed.");
+    if (job.status !== "completed" || !job.bytes) return { status: job.status, message: null };
+
+    const ref = await storeGenerated(account.id, job.bytes, "mp4", "video/mp4");
+    const { data: saved } = await admin
+      .from("messages")
+      .insert({
+        chat_id: data.chatId,
+        role: "assistant",
+        content: "Here is your generated video.",
+        image_url: ref,
+      })
+      .select("id, role, content, image_url, created_at")
+      .maybeSingle();
+    await admin.from("chats").update({ updated_at: new Date().toISOString() }).eq("id", data.chatId);
+
+    return {
+      status: "completed",
+      message: saved ? { ...saved, image_url: await signMedia(saved.image_url as string | null) } : null,
+    };
+  });
+
+/* ---------------- Voice transcription fallback ---------------- */
+
+export const transcribeVoice = createServerFn({ method: "POST" })
+  .inputValidator((d: unknown) =>
+    z
+      .object({
+        recoveryKey: keySchema,
+        mimeType: z.string().min(1).max(120),
+        base64: z.string().min(16),
+      })
+      .parse(d),
+  )
+  .handler(async ({ data }) => {
+    await requireAccount(data.recoveryKey);
+    const text = await transcribeAudio(data.base64, data.mimeType);
+    return { text };
+  });
+
+/* ---------------- Secret notes ---------------- */
+
+export const listVaultNotes = createServerFn({ method: "POST" })
+  .inputValidator((d: unknown) => z.object({ recoveryKey: keySchema, pin: pinSchema }).parse(d))
+  .handler(async ({ data }) => {
+    const account = await requirePin(data.recoveryKey, data.pin);
+    const admin = await getAdmin();
+    const { data: rows, error } = await admin
+      .from("vault_notes")
+      .select("id, title, content, updated_at")
+      .eq("user_id", account.id)
+      .order("updated_at", { ascending: false });
+    if (error) throw new Error(error.message);
+    return rows ?? [];
+  });
+
+export const saveVaultNote = createServerFn({ method: "POST" })
+  .inputValidator((d: unknown) =>
+    z
+      .object({
+        recoveryKey: keySchema,
+        pin: pinSchema,
+        noteId: z.string().uuid().nullable(),
+        title: z.string().max(160),
+        content: z.string().max(40000),
+      })
+      .parse(d),
+  )
+  .handler(async ({ data }) => {
+    const account = await requirePin(data.recoveryKey, data.pin);
+    const admin = await getAdmin();
+    const title = data.title.trim() || "Untitled note";
+
+    if (data.noteId) {
+      const { data: row, error } = await admin
+        .from("vault_notes")
+        .update({ title, content: data.content, updated_at: new Date().toISOString() })
+        .eq("id", data.noteId)
+        .eq("user_id", account.id)
+        .select("id, title, content, updated_at")
+        .maybeSingle();
+      if (error) throw new Error(error.message);
+      if (!row) throw new Error("Note not found.");
+      return row;
+    }
+
+    const { data: row, error } = await admin
+      .from("vault_notes")
+      .insert({ user_id: account.id, title, content: data.content })
+      .select("id, title, content, updated_at")
+      .maybeSingle();
+    if (error) throw new Error(error.message);
+    return row;
+  });
+
+export const deleteVaultNote = createServerFn({ method: "POST" })
+  .inputValidator((d: unknown) =>
+    z.object({ recoveryKey: keySchema, pin: pinSchema, noteId: z.string().uuid() }).parse(d),
+  )
+  .handler(async ({ data }) => {
+    const account = await requirePin(data.recoveryKey, data.pin);
+    const admin = await getAdmin();
+    await admin.from("vault_notes").delete().eq("id", data.noteId).eq("user_id", account.id);
+    return { ok: true };
+  });
