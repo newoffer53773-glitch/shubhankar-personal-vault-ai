@@ -58,7 +58,7 @@ async function geminiComplete(
   messages: Array<{ role: string; content: string }>,
   model: ModelChoice,
   language: string,
-  attachment?: Attachment,
+  attachment?: Attachment | undefined,
 ): Promise<string> {
   const contents = messages.map((m, index) => {
     const parts: Array<Record<string, unknown>> = [{ text: m.content }];
