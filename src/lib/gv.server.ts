@@ -45,13 +45,89 @@ function languageInstruction(language: string): string {
   return "Detect the language of the user's last message and reply in that same language.";
 }
 
+export type Attachment = { mimeType: string; base64: string };
+
+const GEMINI_MODELS: Record<ModelChoice, string> = {
+  flash: "gemini-1.5-flash",
+  pro: "gemini-1.5-pro",
+};
+
+/** Direct Google Gemini call using the user's own API key. */
+async function geminiComplete(
+  apiKey: string,
+  messages: Array<{ role: string; content: string }>,
+  model: ModelChoice,
+  language: string,
+  attachment?: Attachment,
+): Promise<string> {
+  const contents = messages.map((m, index) => {
+    const parts: Array<Record<string, unknown>> = [{ text: m.content }];
+    if (attachment && index === messages.length - 1 && m.role === "user") {
+      parts.push({ inline_data: { mime_type: attachment.mimeType, data: attachment.base64 } });
+    }
+    return { role: m.role === "assistant" ? "model" : "user", parts };
+  });
+
+  const res = await fetch(
+    `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODELS[model]}:generateContent`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-goog-api-key": apiKey },
+      body: JSON.stringify({
+        contents,
+        systemInstruction: {
+          parts: [{ text: `${SYSTEM_PROMPT}\n\n${languageInstruction(language)}` }],
+        },
+      }),
+    },
+  );
+
+  if (!res.ok) {
+    const text = await res.text();
+    if (res.status === 400 || res.status === 403)
+      throw new Error("Your Gemini API key was rejected. Please update it in Settings.");
+    if (res.status === 429) throw new Error("Your Gemini API key hit its rate limit. Try again shortly.");
+    throw new Error(`Gemini request failed (${res.status}): ${text.slice(0, 160)}`);
+  }
+
+  const json = (await res.json()) as {
+    candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
+  };
+  const reply = json.candidates?.[0]?.content?.parts?.map((p) => p.text ?? "").join("").trim();
+  return reply || "(no response)";
+}
+
 export async function chatComplete(
   messages: Array<{ role: string; content: string }>,
   model: ModelChoice,
   language: string,
+  options?: { apiKey?: string | null; attachment?: Attachment },
 ): Promise<string> {
+  if (options?.apiKey) {
+    return geminiComplete(options.apiKey, messages, model, language, options.attachment);
+  }
+
   const apiKey = process.env["LOVABLE_API_KEY"];
   if (!apiKey) throw new Error("AI is not configured.");
+
+  const last = messages[messages.length - 1];
+  const gatewayMessages = messages.map((m, index) => {
+    if (options?.attachment && index === messages.length - 1 && last?.role === "user") {
+      return {
+        role: m.role,
+        content: [
+          { type: "text", text: m.content },
+          {
+            type: "image_url",
+            image_url: {
+              url: `data:${options.attachment.mimeType};base64,${options.attachment.base64}`,
+            },
+          },
+        ],
+      };
+    }
+    return { role: m.role, content: m.content };
+  });
 
   const res = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
     method: "POST",
@@ -63,7 +139,7 @@ export async function chatComplete(
       model: MODEL_MAP[model],
       messages: [
         { role: "system", content: `${SYSTEM_PROMPT}\n\n${languageInstruction(language)}` },
-        ...messages,
+        ...gatewayMessages,
       ],
     }),
   });
@@ -80,6 +156,7 @@ export async function chatComplete(
   };
   return json.choices?.[0]?.message?.content?.trim() || "(no response)";
 }
+
 
 export async function generateImageDataUrl(prompt: string): Promise<string> {
   const apiKey = process.env["LOVABLE_API_KEY"];
