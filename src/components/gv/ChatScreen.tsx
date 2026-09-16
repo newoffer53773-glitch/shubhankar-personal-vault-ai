@@ -1,42 +1,54 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useServerFn } from "@tanstack/react-start";
 import {
+  Camera,
   ChevronDown,
+  Copy,
+  Film,
   Globe,
   Image as ImageIcon,
+  Images,
   Keyboard,
+  Loader2,
   Lock,
   Menu,
-  Loader2,
   Mic,
   MicOff,
   Plus,
   Send,
+  Settings,
   Sparkle,
   SquarePlay,
   Trash2,
+  Volume2,
   X,
 } from "lucide-react";
 import { toast } from "sonner";
 
 import {
+  checkVideoGeneration,
   deleteChat as deleteChatFn,
   generateImage,
   listChats,
   listMessages,
   sendMessage,
   setLanguage as setLanguageFn,
+  startVideoGeneration,
+  transcribeVoice,
 } from "@/lib/gv.functions";
 import {
   extractImagePrompt,
+  fileToBase64,
   isVaultCommand,
   type ChatMessage,
   type Lang,
   type ModelChoice,
 } from "@/lib/gv-client";
+import { detectLang, speak, stopSpeaking, type VoiceStyle } from "@/lib/gv-crypto";
 import { BengaliKeyboard } from "./BengaliKeyboard";
 
 type ChatSummary = { id: string; title: string; updated_at: string };
+type Attachment = { mimeType: string; base64: string; name: string };
 
 const MODEL_LABELS: Record<ModelChoice, string> = {
   flash: "Gemini 1.5 Flash",
@@ -60,21 +72,34 @@ type SpeechRecognitionLike = {
   onerror: (() => void) | null;
 };
 
+function isVideoUrl(url: string) {
+  return /\.mp4(\?|$)/i.test(url);
+}
+
 export function ChatScreen({
   recoveryKey,
   language,
+  apiKey,
+  voice,
   onLanguageChange,
   onVaultCommand,
+  onOpenSettings,
   onSignOut,
 }: {
   recoveryKey: string;
   language: Lang;
+  apiKey: string | null;
+  voice: VoiceStyle;
   onLanguageChange: (lang: Lang) => void;
   onVaultCommand: () => void;
+  onOpenSettings: () => void;
   onSignOut: () => void;
 }) {
   const send = useServerFn(sendMessage);
   const genImage = useServerFn(generateImage);
+  const startVideo = useServerFn(startVideoGeneration);
+  const checkVideo = useServerFn(checkVideoGeneration);
+  const transcribe = useServerFn(transcribeVoice);
   const chatsFn = useServerFn(listChats);
   const messagesFn = useServerFn(listMessages);
   const removeChat = useServerFn(deleteChatFn);
@@ -88,15 +113,20 @@ export function ChatScreen({
   const [chatId, setChatId] = useState<string | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
+  const [attachment, setAttachment] = useState<Attachment | null>(null);
   const [thinking, setThinking] = useState(false);
+  const [busyLabel, setBusyLabel] = useState("Thinking…");
   const [listening, setListening] = useState(false);
-  const [liveVideo, setLiveVideo] = useState(false);
+  const [liveMode, setLiveMode] = useState(false);
   const [showBnKeyboard, setShowBnKeyboard] = useState(false);
+  const [speakingId, setSpeakingId] = useState<string | null>(null);
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
+  const recorderRef = useRef<MediaRecorder | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
+  const galleryRef = useRef<HTMLInputElement>(null);
 
   const loadChats = useCallback(async () => {
     try {
@@ -115,16 +145,16 @@ export function ChatScreen({
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, thinking]);
 
-  // Live video mode: camera preview
+  // Live mode: camera preview
   useEffect(() => {
-    if (!liveVideo) {
+    if (!liveMode) {
       streamRef.current?.getTracks().forEach((t) => t.stop());
       streamRef.current = null;
       return;
     }
     let cancelled = false;
     navigator.mediaDevices
-      ?.getUserMedia({ video: { facingMode: "user" }, audio: false })
+      ?.getUserMedia({ video: { facingMode: "environment" }, audio: false })
       .then((stream) => {
         if (cancelled) {
           stream.getTracks().forEach((t) => t.stop());
@@ -134,18 +164,19 @@ export function ChatScreen({
         if (videoRef.current) videoRef.current.srcObject = stream;
       })
       .catch(() => {
-        toast.error("Camera permission is needed for Live Video Mode.");
-        setLiveVideo(false);
+        toast.error("Camera permission is needed for Live Mode.");
+        setLiveMode(false);
       });
     return () => {
       cancelled = true;
     };
-  }, [liveVideo]);
+  }, [liveMode]);
 
   useEffect(
     () => () => {
       streamRef.current?.getTracks().forEach((t) => t.stop());
       recognitionRef.current?.stop();
+      stopSpeaking();
     },
     [],
   );
@@ -180,11 +211,61 @@ export function ChatScreen({
     ]);
   }
 
+  async function handleGallery(files: FileList | null) {
+    const file = files?.[0];
+    if (!file) return;
+    if (file.size > 12 * 1024 * 1024) {
+      toast.error("Please pick a photo or video under 12 MB.");
+      return;
+    }
+    const base64 = await fileToBase64(file);
+    setAttachment({
+      mimeType: file.type || "application/octet-stream",
+      base64,
+      name: file.name,
+    });
+    if (galleryRef.current) galleryRef.current.value = "";
+  }
+
+  function captureSnapshot() {
+    const video = videoRef.current;
+    if (!video) return;
+    const canvas = document.createElement("canvas");
+    canvas.width = video.videoWidth || 720;
+    canvas.height = video.videoHeight || 540;
+    canvas.getContext("2d")?.drawImage(video, 0, 0, canvas.width, canvas.height);
+    const dataUrl = canvas.toDataURL("image/jpeg", 0.85);
+    setAttachment({
+      mimeType: "image/jpeg",
+      base64: dataUrl.slice(dataUrl.indexOf(",") + 1),
+      name: "live-snapshot.jpg",
+    });
+    toast.success("Snapshot captured — ask about what the camera sees.");
+  }
+
+  async function runVideoGeneration(prompt: string) {
+    setBusyLabel("Generating video… this takes a minute or two");
+    const { chatId: id, jobId } = await startVideo({ data: { recoveryKey, chatId, prompt } });
+    setChatId(id);
+    pushLocal("user", `🎬 ${prompt}`);
+
+    for (let attempt = 0; attempt < 60; attempt++) {
+      await new Promise((resolve) => setTimeout(resolve, 7000));
+      const res = await checkVideo({ data: { recoveryKey, chatId: id, jobId } });
+      if (res.status === "completed") {
+        if (res.message) setMessages((prev) => [...prev, res.message as ChatMessage]);
+        void loadChats();
+        return;
+      }
+    }
+    throw new Error("Video generation is taking too long. Please try again.");
+  }
+
   async function handleSubmit(rawText?: string) {
     const text = (rawText ?? input).trim();
-    if (!text || thinking) return;
+    if ((!text && !attachment) || thinking) return;
 
-    if (isVaultCommand(text)) {
+    if (text && isVaultCommand(text)) {
       setInput("");
       pushLocal("user", text);
       pushLocal("assistant", "ভল্ট আনলক করার জন্য আপনার মাস্টার পিন দিন। 🔒");
@@ -194,22 +275,20 @@ export function ChatScreen({
 
     setInput("");
     setThinking(true);
+    setBusyLabel("Thinking…");
 
     const imagePrompt = extractImagePrompt(text);
     const videoPrompt = /^\/video\s+/i.test(text) ? text.replace(/^\/video\s+/i, "").trim() : null;
+    const pending = attachment;
 
     try {
       if (videoPrompt) {
-        pushLocal("user", `🎬 ${videoPrompt}`);
-        pushLocal(
-          "assistant",
-          "Video generation is queued through the AI video API placeholder. Image generation is live — try /image " +
-            videoPrompt,
-        );
+        await runVideoGeneration(videoPrompt);
         return;
       }
 
       if (imagePrompt) {
+        setBusyLabel("Generating image…");
         pushLocal("user", `🖼️ ${imagePrompt}`);
         const res = await genImage({ data: { recoveryKey, chatId, prompt: imagePrompt } });
         setChatId(res.chatId);
@@ -218,8 +297,26 @@ export function ChatScreen({
         return;
       }
 
-      pushLocal("user", text);
-      const res = await send({ data: { recoveryKey, chatId, text, model, language } });
+      pushLocal(
+        "user",
+        pending ? `${text || "What do you see here?"}\n📎 ${pending.name}` : text,
+        pending?.mimeType.startsWith("image/")
+          ? `data:${pending.mimeType};base64,${pending.base64}`
+          : null,
+      );
+      setAttachment(null);
+
+      const res = await send({
+        data: {
+          recoveryKey,
+          chatId,
+          text: text || "Describe this attachment in detail.",
+          model,
+          language,
+          apiKey,
+          attachment: pending ? { mimeType: pending.mimeType, base64: pending.base64 } : null,
+        },
+      });
       setChatId(res.chatId);
       if (res.message) setMessages((prev) => [...prev, res.message as ChatMessage]);
       void loadChats();
@@ -230,20 +327,61 @@ export function ChatScreen({
     }
   }
 
+  /* -------- Voice input: Web Speech, with a Gemini transcription fallback -------- */
+
+  async function recordAndTranscribe() {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const recorder = new MediaRecorder(stream);
+      const chunks: Blob[] = [];
+      recorder.ondataavailable = (event) => chunks.push(event.data);
+      recorder.onstop = async () => {
+        stream.getTracks().forEach((t) => t.stop());
+        setListening(false);
+        const blob = new Blob(chunks, { type: recorder.mimeType || "audio/webm" });
+        if (blob.size < 1200) return;
+        try {
+          setThinking(true);
+          setBusyLabel("Transcribing your voice…");
+          const base64 = await fileToBase64(new File([blob], "voice.webm", { type: blob.type }));
+          const { text } = await transcribe({
+            data: { recoveryKey, mimeType: blob.type, base64 },
+          });
+          setThinking(false);
+          if (text) await handleSubmit(text);
+          else toast.error("Could not hear anything in that recording.");
+        } catch (error) {
+          setThinking(false);
+          toast.error(error instanceof Error ? error.message : "Voice input failed.");
+        }
+      };
+      recorderRef.current = recorder;
+      recorder.start();
+      setListening(true);
+    } catch {
+      toast.error("Microphone permission is needed for voice input.");
+    }
+  }
+
   function toggleMic() {
     if (listening) {
       recognitionRef.current?.stop();
+      recorderRef.current?.stop();
+      recorderRef.current = null;
       setListening(false);
       return;
     }
+
     const w = window as unknown as Record<string, unknown>;
     const Ctor = (w["SpeechRecognition"] ?? w["webkitSpeechRecognition"]) as
       | (new () => SpeechRecognitionLike)
       | undefined;
+
     if (!Ctor) {
-      toast.error("Voice input is not supported in this browser.");
+      void recordAndTranscribe();
       return;
     }
+
     const recognition = new Ctor();
     recognition.lang = language === "en" ? "en-US" : "bn-BD";
     recognition.continuous = false;
@@ -253,10 +391,37 @@ export function ChatScreen({
       if (transcript) void handleSubmit(transcript);
     };
     recognition.onend = () => setListening(false);
-    recognition.onerror = () => setListening(false);
+    recognition.onerror = () => {
+      setListening(false);
+      void recordAndTranscribe();
+    };
     recognitionRef.current = recognition;
     recognition.start();
     setListening(true);
+  }
+
+  function toggleSpeak(message: ChatMessage) {
+    if (speakingId === message.id) {
+      stopSpeaking();
+      setSpeakingId(null);
+      return;
+    }
+    const spokenLang = language === "auto" ? detectLang(message.content) : language;
+    const ok = speak(message.content, voice, spokenLang);
+    if (!ok) {
+      toast.error("Speech is not supported in this browser.");
+      return;
+    }
+    setSpeakingId(message.id);
+  }
+
+  async function copyMessage(text: string) {
+    try {
+      await navigator.clipboard.writeText(text);
+      toast.success("Copied.");
+    } catch {
+      toast.error("Could not copy the text.");
+    }
   }
 
   async function pickLanguage(lang: Lang) {
@@ -306,24 +471,41 @@ export function ChatScreen({
           )}
         </div>
         <button
-          onClick={() => setLiveVideo((v) => !v)}
-          className={`rounded-full p-2 ${liveVideo ? "bg-secondary text-[color:var(--brand-1)]" : "hover:bg-secondary"}`}
-          aria-label="Live video mode"
+          onClick={() => setLiveMode((v) => !v)}
+          className={`rounded-full p-2 ${liveMode ? "bg-secondary text-[color:var(--brand-1)]" : "hover:bg-secondary"}`}
+          aria-label="Live mode"
         >
           <SquarePlay className="size-5" />
         </button>
+        <button onClick={onOpenSettings} className="rounded-full p-2 hover:bg-secondary" aria-label="Settings">
+          <Settings className="size-5" />
+        </button>
       </header>
 
-      {liveVideo && (
+      {liveMode && (
         <div className="relative mx-3 mt-3 overflow-hidden rounded-2xl border border-border">
           <video ref={videoRef} autoPlay playsInline muted className="h-48 w-full bg-black object-cover" />
           <button
-            onClick={() => setLiveVideo(false)}
+            onClick={() => setLiveMode(false)}
             className="absolute right-2 top-2 rounded-full bg-black/60 p-1.5"
           >
             <X className="size-4 text-white" />
           </button>
-          <span className="absolute bottom-2 left-3 text-[11px] text-white/80">Live Video Mode</span>
+          <span className="absolute bottom-2 left-3 text-[11px] text-white/80">Live Mode</span>
+          <div className="absolute bottom-2 right-2 flex gap-2">
+            <button
+              onClick={captureSnapshot}
+              className="flex items-center gap-1 rounded-full bg-white/90 px-3 py-1.5 text-[11px] font-medium text-black"
+            >
+              <Camera className="size-3.5" /> Snapshot
+            </button>
+            <button
+              onClick={toggleMic}
+              className="flex items-center gap-1 rounded-full bg-white/90 px-3 py-1.5 text-[11px] font-medium text-black"
+            >
+              <Mic className="size-3.5" /> Ask
+            </button>
+          </div>
         </div>
       )}
 
@@ -337,8 +519,8 @@ export function ChatScreen({
               Hello there
             </h2>
             <p className="mt-2 max-w-xs text-sm text-muted-foreground">
-              Ask anything, speak with the mic, generate images with <code>/image</code>, or say
-              “আমার পার্সোনাল ভল্ট খোলো” to open your vault.
+              Ask anything, attach a photo or video, speak with the mic, create images with{" "}
+              <code>/image</code>, videos with <code>/video</code>, or say “আমার পার্সোনাল ভল্ট খোলো”.
             </p>
           </div>
         ) : (
@@ -346,9 +528,18 @@ export function ChatScreen({
             {messages.map((message) =>
               message.role === "user" ? (
                 <div key={message.id} className="flex justify-end">
-                  <p className="max-w-[85%] rounded-3xl bg-primary px-4 py-2.5 text-[15px] text-primary-foreground">
-                    {message.content}
-                  </p>
+                  <div className="max-w-[85%]">
+                    {message.image_url && (
+                      <img
+                        src={message.image_url}
+                        alt="Attached"
+                        className="mb-1 w-full rounded-2xl border border-border"
+                      />
+                    )}
+                    <p className="whitespace-pre-wrap rounded-3xl bg-primary px-4 py-2.5 text-[15px] text-primary-foreground">
+                      {message.content}
+                    </p>
+                  </div>
                 </div>
               ) : (
                 <div key={message.id} className="flex gap-2.5">
@@ -359,20 +550,48 @@ export function ChatScreen({
                     <p className="whitespace-pre-wrap text-[15px] leading-relaxed text-foreground">
                       {message.content}
                     </p>
-                    {message.image_url && (
-                      <img
-                        src={message.image_url}
-                        alt="AI generated"
-                        className="mt-2 w-full max-w-xs rounded-2xl border border-border"
-                      />
-                    )}
+                    {message.image_url &&
+                      (isVideoUrl(message.image_url) ? (
+                        <video
+                          src={message.image_url}
+                          controls
+                          playsInline
+                          className="mt-2 w-full max-w-xs rounded-2xl border border-border"
+                        />
+                      ) : (
+                        <img
+                          src={message.image_url}
+                          alt="AI generated"
+                          className="mt-2 w-full max-w-xs rounded-2xl border border-border"
+                        />
+                      ))}
+                    <div className="mt-1.5 flex gap-1">
+                      <button
+                        onClick={() => toggleSpeak(message)}
+                        className={`rounded-full p-1.5 hover:bg-secondary ${
+                          speakingId === message.id
+                            ? "text-[color:var(--brand-1)]"
+                            : "text-muted-foreground"
+                        }`}
+                        aria-label="Read aloud"
+                      >
+                        <Volume2 className="size-4" />
+                      </button>
+                      <button
+                        onClick={() => void copyMessage(message.content)}
+                        className="rounded-full p-1.5 text-muted-foreground hover:bg-secondary"
+                        aria-label="Copy text"
+                      >
+                        <Copy className="size-4" />
+                      </button>
+                    </div>
                   </div>
                 </div>
               ),
             )}
             {thinking && (
               <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                <Loader2 className="size-4 animate-spin" /> Thinking…
+                <Loader2 className="size-4 animate-spin" /> {busyLabel}
               </div>
             )}
           </div>
@@ -387,7 +606,30 @@ export function ChatScreen({
             onBackspace={() => setInput((prev) => prev.slice(0, -1))}
           />
         )}
-        <div className="flex items-end gap-1.5 rounded-3xl border border-border bg-card px-2 py-1.5">
+
+        {attachment && (
+          <div className="flex items-center gap-2 rounded-2xl border border-border bg-card px-3 py-2 text-xs">
+            <Images className="size-4 text-[color:var(--brand-2)]" />
+            <span className="min-w-0 flex-1 truncate">{attachment.name}</span>
+            <button
+              onClick={() => setAttachment(null)}
+              className="rounded-full p-1 text-muted-foreground hover:bg-secondary"
+              aria-label="Remove attachment"
+            >
+              <X className="size-3.5" />
+            </button>
+          </div>
+        )}
+
+        <input
+          ref={galleryRef}
+          type="file"
+          accept="image/*,video/*"
+          hidden
+          onChange={(e) => void handleGallery(e.target.files)}
+        />
+
+        <div className="flex items-end gap-1 rounded-3xl border border-border bg-card px-2 py-1.5">
           <div className="relative">
             <button
               onClick={() => setLangOpen((v) => !v)}
@@ -412,6 +654,13 @@ export function ChatScreen({
               </div>
             )}
           </div>
+          <button
+            onClick={() => galleryRef.current?.click()}
+            className="rounded-full p-2 text-muted-foreground hover:bg-secondary"
+            aria-label="Attach photo or video"
+          >
+            <Images className="size-5" />
+          </button>
           <button
             onClick={() => setShowBnKeyboard((v) => !v)}
             className={`rounded-full p-2 ${showBnKeyboard ? "text-[color:var(--brand-1)]" : "text-muted-foreground"} hover:bg-secondary`}
@@ -440,7 +689,15 @@ export function ChatScreen({
           >
             <ImageIcon className="size-5" />
           </button>
-          {input.trim() ? (
+          <button
+            onClick={() => void handleSubmit(`/video ${input.trim()}`)}
+            disabled={!input.trim() || thinking}
+            className="rounded-full p-2 text-muted-foreground hover:bg-secondary disabled:opacity-40"
+            aria-label="Generate video"
+          >
+            <Film className="size-5" />
+          </button>
+          {input.trim() || attachment ? (
             <button
               onClick={() => void handleSubmit()}
               disabled={thinking}
@@ -501,6 +758,12 @@ export function ChatScreen({
               className="mt-4 flex w-full items-center gap-2 rounded-2xl px-3 py-2.5 text-sm text-muted-foreground hover:bg-secondary"
             >
               <Lock className="size-4" /> Personal Vault
+            </button>
+            <button
+              onClick={onOpenSettings}
+              className="mt-1 flex w-full items-center gap-2 rounded-2xl px-3 py-2.5 text-sm text-muted-foreground hover:bg-secondary"
+            >
+              <Settings className="size-4" /> Settings
             </button>
             <button
               onClick={onSignOut}
