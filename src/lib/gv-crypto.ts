@@ -41,6 +41,12 @@ export function clearApiKey() {
   window.localStorage.removeItem(KEY_STORE);
 }
 
+export function hasApiKey(): boolean {
+  if (typeof window === "undefined") return false;
+  return Boolean(window.localStorage.getItem(KEY_STORE));
+}
+
+
 export function maskApiKey(key: string): string {
   if (key.length <= 8) return "••••••••";
   return `${key.slice(0, 4)}${"•".repeat(Math.max(6, key.length - 8))}${key.slice(-4)}`;
