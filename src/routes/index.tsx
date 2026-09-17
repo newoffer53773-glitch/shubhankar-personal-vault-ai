@@ -3,12 +3,15 @@ import { useCallback, useEffect, useState } from "react";
 import { useServerFn } from "@tanstack/react-start";
 import { Toaster } from "@/components/ui/sonner";
 
+import { ApiKeyScreen } from "@/components/gv/ApiKeyScreen";
 import { AuthScreen } from "@/components/gv/AuthScreen";
+import { SettingsSheet } from "@/components/gv/SettingsSheet";
 import { ChatScreen } from "@/components/gv/ChatScreen";
 import { PinGate } from "@/components/gv/PinGate";
 import { VaultScreen } from "@/components/gv/VaultScreen";
 import { getAccountState } from "@/lib/gv.functions";
 import { clearKey, loadKey, type Lang } from "@/lib/gv-client";
+import { hasApiKey, loadApiKey, loadVoice, type VoiceStyle } from "@/lib/gv-crypto";
 
 export const Route = createFileRoute("/")({
   head: () => ({
@@ -32,7 +35,7 @@ export const Route = createFileRoute("/")({
   component: Index,
 });
 
-type Screen = "loading" | "auth" | "chat" | "pin" | "vault";
+type Screen = "loading" | "auth" | "apikey" | "chat" | "pin" | "vault";
 
 function Index() {
   const accountState = useServerFn(getAccountState);
@@ -41,6 +44,9 @@ function Index() {
   const [hasPin, setHasPin] = useState(false);
   const [pin, setPin] = useState<string | null>(null);
   const [language, setLanguage] = useState<Lang>("auto");
+  const [apiKey, setApiKey] = useState<string | null>(null);
+  const [voice, setVoice] = useState<VoiceStyle>("friendly");
+  const [showSettings, setShowSettings] = useState(false);
 
   const bootstrap = useCallback(
     async (key: string) => {
@@ -49,7 +55,7 @@ function Index() {
         setHasPin(state.hasPin);
         setLanguage((state.language as Lang) ?? "auto");
         setRecoveryKey(key);
-        setScreen("chat");
+        setScreen(hasApiKey() ? "chat" : "apikey");
       } catch {
         clearKey();
         setScreen("auth");
@@ -59,6 +65,8 @@ function Index() {
   );
 
   useEffect(() => {
+    setApiKey(loadApiKey());
+    setVoice(loadVoice());
     const stored = loadKey();
     if (!stored) {
       setScreen("auth");
@@ -85,11 +93,23 @@ function Index() {
 
       {screen === "auth" && <AuthScreen onReady={(key) => void bootstrap(key)} />}
 
+      {screen === "apikey" && (
+        <ApiKeyScreen
+          onDone={(key) => {
+            setApiKey(key);
+            setScreen("chat");
+          }}
+        />
+      )}
+
       {screen === "chat" && recoveryKey && (
         <ChatScreen
           recoveryKey={recoveryKey}
           language={language}
+          apiKey={apiKey}
+          voice={voice}
           onLanguageChange={setLanguage}
+          onOpenSettings={() => setShowSettings(true)}
           onVaultCommand={() => void openVault()}
           onSignOut={() => {
             clearKey();
@@ -110,6 +130,16 @@ function Index() {
             setScreen("vault");
           }}
           onCancel={() => setScreen("chat")}
+        />
+      )}
+
+      {showSettings && (
+        <SettingsSheet
+          apiKey={apiKey}
+          voice={voice}
+          onApiKeyChange={setApiKey}
+          onVoiceChange={setVoice}
+          onClose={() => setShowSettings(false)}
         />
       )}
 
