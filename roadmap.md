@@ -1,7 +1,7 @@
-# Gemini Vault AI roadmap
+# Gemini Vault AI — roadmap
 
-- [ ] One-time encrypted API key setup (AES in local storage, masked view/update in Settings)
-- [ ] Multimodal chat: gallery upload (photos/videos) + Live Mode snapshot & voice
-- [ ] Vault with 4 tabs: Photos, Videos, Documents/PDFs, Secret Notes (rich editor)
-- [ ] TTS speaker + copy buttons on AI messages; voice selection in Settings
-- [ ] Mic and image/video generation buttons wired to real Gemini calls (no placeholders)
+- [x] Encrypted one-time Gemini API key setup (AES in local storage) + Settings view/update
+- [x] Multimodal chat: gallery photo/video attach, Live Mode camera snapshot + voice
+- [x] Vault with 4 tabs: Photos, Videos, Docs/PDFs, Secret Notes (rich-text editor)
+- [x] TTS speaker + copy buttons under every AI reply; voice style picker in Settings
+- [x] Mic, image generation and video generation wired to real model calls
