@@ -4,6 +4,7 @@ import {
   ArrowLeft,
   FileText,
   Image as ImageIcon,
+  KeyRound,
   Loader2,
   Lock,
   NotebookPen,
@@ -13,6 +14,7 @@ import {
   Upload,
   Video,
 } from "lucide-react";
+
 import { toast } from "sonner";
 
 import {
@@ -27,6 +29,8 @@ import {
 } from "@/lib/gv.functions";
 import { fileToBase64, formatBytes } from "@/lib/gv-client";
 import { NoteEditor } from "./NoteEditor";
+import { PasswordVault } from "./PasswordVault";
+
 
 type VaultFile = {
   id: string;
@@ -40,23 +44,27 @@ export type VaultNote = {
   id: string;
   title: string;
   content: string;
+  kind?: string;
   updated_at: string;
 };
 
-type Tab = "photos" | "videos" | "docs" | "notes";
+type Tab = "photos" | "videos" | "docs" | "notes" | "passwords";
 
 const TABS: Array<{ id: Tab; label: string; icon: typeof ImageIcon; accept: string }> = [
   { id: "photos", label: "Photos", icon: ImageIcon, accept: "image/*" },
   { id: "videos", label: "Videos", icon: Video, accept: "video/*" },
   { id: "docs", label: "Docs", icon: FileText, accept: ".pdf,.doc,.docx,.txt,.xls,.xlsx,.ppt,.pptx" },
   { id: "notes", label: "Notes", icon: NotebookPen, accept: "" },
+  { id: "passwords", label: "Passwords", icon: KeyRound, accept: "" },
 ];
 
-function categoryOf(mime: string): Exclude<Tab, "notes"> {
+function categoryOf(mime: string): "photos" | "videos" | "docs" {
   if (mime.startsWith("image/")) return "photos";
   if (mime.startsWith("video/")) return "videos";
   return "docs";
 }
+
+
 
 export function VaultScreen({
   recoveryKey,
@@ -150,25 +158,25 @@ export function VaultScreen({
     }
   }
 
-  async function handleSaveNote(title: string, content: string) {
+  async function handleSaveNote(
+    title: string,
+    content: string,
+    kind: "note" | "password" = "note",
+    forcedId: string | null = null,
+  ) {
     try {
+      const noteId = forcedId ?? (editingNote && editingNote !== "new" ? editingNote.id : null);
       const saved = await saveNoteFn({
-        data: {
-          recoveryKey,
-          pin,
-          noteId: editingNote && editingNote !== "new" ? editingNote.id : null,
-          title,
-          content,
-        },
+        data: { recoveryKey, pin, noteId, title, content, kind },
       });
       if (saved) {
         const note = saved as VaultNote;
         setNotes((prev) => [note, ...prev.filter((n) => n.id !== note.id)]);
       }
       setEditingNote(null);
-      toast.success("Note locked in your vault.");
+      toast.success(kind === "password" ? "Password locked in your vault." : "Note locked in your vault.");
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Could not save the note.");
+      toast.error(error instanceof Error ? error.message : "Could not save.");
     }
   }
 
@@ -194,8 +202,12 @@ export function VaultScreen({
   }
 
   const activeTab = TABS.find((t) => t.id === tab)!;
-  const visibleFiles = tab === "notes" ? [] : files.filter((f) => categoryOf(f.mime_type) === tab);
+  const visibleFiles =
+    tab === "notes" || tab === "passwords"
+      ? []
+      : files.filter((f) => categoryOf(f.mime_type) === tab);
   const itemCount = files.length + notes.length;
+
 
   if (editingNote) {
     return (
@@ -282,7 +294,15 @@ export function VaultScreen({
           onChange={(e) => void handleUpload(e.target.files)}
         />
 
-        {tab === "notes" ? (
+        {tab === "passwords" ? (
+          <PasswordVault
+            entries={notes.filter((n) => n.kind === "password")}
+            loading={loading}
+            onSave={(title, content, id) => handleSaveNote(title, content, "password", id)}
+            onDelete={(id) => void handleDeleteNote(id)}
+          />
+        ) : tab === "notes" ? (
+
           <>
             <button
               onClick={() => setEditingNote("new")}
@@ -294,13 +314,14 @@ export function VaultScreen({
               <div className="flex justify-center py-10">
                 <Loader2 className="size-5 animate-spin text-muted-foreground" />
               </div>
-            ) : notes.length === 0 ? (
+            ) : notes.filter((n) => n.kind !== "password").length === 0 ? (
               <p className="py-10 text-center text-sm text-muted-foreground">
                 No secret notes yet. Anything you write here is locked behind your PIN.
               </p>
             ) : (
               <ul className="space-y-2">
-                {notes.map((note) => (
+                {notes.filter((n) => n.kind !== "password").map((note) => (
+
                   <li
                     key={note.id}
                     className="flex items-start gap-3 rounded-2xl border border-border bg-card px-3 py-3"

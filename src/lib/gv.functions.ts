@@ -480,7 +480,9 @@ export const transcribeVoice = createServerFn({ method: "POST" })
     return { text };
   });
 
-/* ---------------- Secret notes ---------------- */
+/* ---------------- Secret notes & passwords ---------------- */
+
+const kindSchema = z.enum(["note", "password"]);
 
 export const listVaultNotes = createServerFn({ method: "POST" })
   .inputValidator((d: unknown) => z.object({ recoveryKey: keySchema, pin: pinSchema }).parse(d))
@@ -489,7 +491,7 @@ export const listVaultNotes = createServerFn({ method: "POST" })
     const admin = await getAdmin();
     const { data: rows, error } = await admin
       .from("vault_notes")
-      .select("id, title, content, updated_at")
+      .select("id, title, content, kind, updated_at")
       .eq("user_id", account.id)
       .order("updated_at", { ascending: false });
     if (error) throw new Error(error.message);
@@ -505,21 +507,23 @@ export const saveVaultNote = createServerFn({ method: "POST" })
         noteId: z.string().uuid().nullable(),
         title: z.string().max(160),
         content: z.string().max(40000),
+        kind: kindSchema.optional(),
       })
       .parse(d),
   )
   .handler(async ({ data }) => {
     const account = await requirePin(data.recoveryKey, data.pin);
     const admin = await getAdmin();
-    const title = data.title.trim() || "Untitled note";
+    const kind = data.kind ?? "note";
+    const title = data.title.trim() || (kind === "password" ? "Untitled entry" : "Untitled note");
 
     if (data.noteId) {
       const { data: row, error } = await admin
         .from("vault_notes")
-        .update({ title, content: data.content, updated_at: new Date().toISOString() })
+        .update({ title, content: data.content, kind, updated_at: new Date().toISOString() })
         .eq("id", data.noteId)
         .eq("user_id", account.id)
-        .select("id, title, content, updated_at")
+        .select("id, title, content, kind, updated_at")
         .maybeSingle();
       if (error) throw new Error(error.message);
       if (!row) throw new Error("Note not found.");
@@ -528,12 +532,13 @@ export const saveVaultNote = createServerFn({ method: "POST" })
 
     const { data: row, error } = await admin
       .from("vault_notes")
-      .insert({ user_id: account.id, title, content: data.content })
-      .select("id, title, content, updated_at")
+      .insert({ user_id: account.id, title, content: data.content, kind })
+      .select("id, title, content, kind, updated_at")
       .maybeSingle();
     if (error) throw new Error(error.message);
     return row;
   });
+
 
 export const deleteVaultNote = createServerFn({ method: "POST" })
   .inputValidator((d: unknown) =>
