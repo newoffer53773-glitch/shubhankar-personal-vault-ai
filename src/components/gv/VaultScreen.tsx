@@ -4,6 +4,7 @@ import {
   ArrowLeft,
   FileText,
   Image as ImageIcon,
+  KeyRound,
   Loader2,
   Lock,
   NotebookPen,
@@ -13,6 +14,7 @@ import {
   Upload,
   Video,
 } from "lucide-react";
+
 import { toast } from "sonner";
 
 import {
@@ -169,25 +171,25 @@ export function VaultScreen({
     }
   }
 
-  async function handleSaveNote(title: string, content: string) {
+  async function handleSaveNote(
+    title: string,
+    content: string,
+    kind: "note" | "password" = "note",
+    forcedId: string | null = null,
+  ) {
     try {
+      const noteId = forcedId ?? (editingNote && editingNote !== "new" ? editingNote.id : null);
       const saved = await saveNoteFn({
-        data: {
-          recoveryKey,
-          pin,
-          noteId: editingNote && editingNote !== "new" ? editingNote.id : null,
-          title,
-          content,
-        },
+        data: { recoveryKey, pin, noteId, title, content, kind },
       });
       if (saved) {
         const note = saved as VaultNote;
         setNotes((prev) => [note, ...prev.filter((n) => n.id !== note.id)]);
       }
       setEditingNote(null);
-      toast.success("Note locked in your vault.");
+      toast.success(kind === "password" ? "Password locked in your vault." : "Note locked in your vault.");
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Could not save the note.");
+      toast.error(error instanceof Error ? error.message : "Could not save.");
     }
   }
 
@@ -213,8 +215,12 @@ export function VaultScreen({
   }
 
   const activeTab = TABS.find((t) => t.id === tab)!;
-  const visibleFiles = tab === "notes" ? [] : files.filter((f) => categoryOf(f.mime_type) === tab);
+  const visibleFiles =
+    tab === "notes" || tab === "passwords"
+      ? []
+      : files.filter((f) => categoryOf(f.mime_type) === tab);
   const itemCount = files.length + notes.length;
+
 
   if (editingNote) {
     return (
@@ -301,7 +307,15 @@ export function VaultScreen({
           onChange={(e) => void handleUpload(e.target.files)}
         />
 
-        {tab === "notes" ? (
+        {tab === "passwords" ? (
+          <PasswordVault
+            entries={notes.filter((n) => n.kind === "password")}
+            loading={loading}
+            onSave={(title, content, id) => handleSaveNote(title, content, "password", id)}
+            onDelete={(id) => void handleDeleteNote(id)}
+          />
+        ) : tab === "notes" ? (
+
           <>
             <button
               onClick={() => setEditingNote("new")}
