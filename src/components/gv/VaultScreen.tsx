@@ -40,23 +40,42 @@ export type VaultNote = {
   id: string;
   title: string;
   content: string;
+  kind?: string;
   updated_at: string;
 };
 
-type Tab = "photos" | "videos" | "docs" | "notes";
+type Tab = "photos" | "videos" | "docs" | "notes" | "passwords";
 
 const TABS: Array<{ id: Tab; label: string; icon: typeof ImageIcon; accept: string }> = [
   { id: "photos", label: "Photos", icon: ImageIcon, accept: "image/*" },
   { id: "videos", label: "Videos", icon: Video, accept: "video/*" },
   { id: "docs", label: "Docs", icon: FileText, accept: ".pdf,.doc,.docx,.txt,.xls,.xlsx,.ppt,.pptx" },
   { id: "notes", label: "Notes", icon: NotebookPen, accept: "" },
+  { id: "passwords", label: "Passwords", icon: KeyRound, accept: "" },
 ];
 
-function categoryOf(mime: string): Exclude<Tab, "notes"> {
+function categoryOf(mime: string): "photos" | "videos" | "docs" {
   if (mime.startsWith("image/")) return "photos";
   if (mime.startsWith("video/")) return "videos";
   return "docs";
 }
+
+type Credential = { label: string; username: string; password: string; url: string };
+
+function parseCredential(note: VaultNote): Credential {
+  try {
+    const parsed = JSON.parse(note.content) as Partial<Credential>;
+    return {
+      label: note.title,
+      username: parsed.username ?? "",
+      password: parsed.password ?? "",
+      url: parsed.url ?? "",
+    };
+  } catch {
+    return { label: note.title, username: "", password: note.content, url: "" };
+  }
+}
+
 
 export function VaultScreen({
   recoveryKey,
