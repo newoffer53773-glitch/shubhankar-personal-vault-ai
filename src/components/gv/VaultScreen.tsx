@@ -29,6 +29,8 @@ import {
 } from "@/lib/gv.functions";
 import { fileToBase64, formatBytes } from "@/lib/gv-client";
 import { NoteEditor } from "./NoteEditor";
+import { PasswordVault } from "./PasswordVault";
+
 
 type VaultFile = {
   id: string;
@@ -62,21 +64,6 @@ function categoryOf(mime: string): "photos" | "videos" | "docs" {
   return "docs";
 }
 
-type Credential = { label: string; username: string; password: string; url: string };
-
-function parseCredential(note: VaultNote): Credential {
-  try {
-    const parsed = JSON.parse(note.content) as Partial<Credential>;
-    return {
-      label: note.title,
-      username: parsed.username ?? "",
-      password: parsed.password ?? "",
-      url: parsed.url ?? "",
-    };
-  } catch {
-    return { label: note.title, username: "", password: note.content, url: "" };
-  }
-}
 
 
 export function VaultScreen({
@@ -327,13 +314,14 @@ export function VaultScreen({
               <div className="flex justify-center py-10">
                 <Loader2 className="size-5 animate-spin text-muted-foreground" />
               </div>
-            ) : notes.length === 0 ? (
+            ) : notes.filter((n) => n.kind !== "password").length === 0 ? (
               <p className="py-10 text-center text-sm text-muted-foreground">
                 No secret notes yet. Anything you write here is locked behind your PIN.
               </p>
             ) : (
               <ul className="space-y-2">
-                {notes.map((note) => (
+                {notes.filter((n) => n.kind !== "password").map((note) => (
+
                   <li
                     key={note.id}
                     className="flex items-start gap-3 rounded-2xl border border-border bg-card px-3 py-3"
