@@ -30,6 +30,7 @@ import {
 import { fileToBase64, formatBytes } from "@/lib/gv-client";
 import { NoteEditor } from "./NoteEditor";
 import { PasswordVault } from "./PasswordVault";
+import { VaultBackup } from "./VaultBackup";
 
 
 type VaultFile = {
@@ -260,6 +261,7 @@ export function VaultScreen({
           >
             Update PIN
           </button>
+          <VaultBackup recoveryKey={recoveryKey} pin={pin} onImported={() => void refresh()} />
         </div>
       )}
 
