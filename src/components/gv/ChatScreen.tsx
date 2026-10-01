@@ -21,6 +21,7 @@ import {
   SquarePlay,
   Trash2,
   Volume2,
+  VolumeX,
   X,
 } from "lucide-react";
 import { toast } from "sonner";
@@ -120,6 +121,7 @@ export function ChatScreen({
   const [liveMode, setLiveMode] = useState(false);
   const [showBnKeyboard, setShowBnKeyboard] = useState(false);
   const [speakingId, setSpeakingId] = useState<string | null>(null);
+  const [autoSpeak, setAutoSpeak] = useState(true);
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -318,7 +320,14 @@ export function ChatScreen({
         },
       });
       setChatId(res.chatId);
-      if (res.message) setMessages((prev) => [...prev, res.message as ChatMessage]);
+      if (res.message) {
+        const reply = res.message as ChatMessage;
+        setMessages((prev) => [...prev, reply]);
+        if (autoSpeak && reply.content) {
+          const spokenLang = language === "auto" ? detectLang(reply.content) : language;
+          if (speak(reply.content, voice, spokenLang)) setSpeakingId(reply.id);
+        }
+      }
       void loadChats();
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Something went wrong.");
@@ -630,43 +639,12 @@ export function ChatScreen({
         />
 
         <div className="flex items-end gap-1 rounded-3xl border border-border bg-card px-2 py-1.5">
-          <div className="relative">
-            <button
-              onClick={() => setLangOpen((v) => !v)}
-              className="rounded-full p-2 text-muted-foreground hover:bg-secondary"
-              aria-label="Language"
-            >
-              <Globe className="size-5" />
-            </button>
-            {langOpen && (
-              <div className="absolute bottom-12 left-0 w-44 overflow-hidden rounded-2xl border border-border bg-card shadow-xl">
-                {(["auto", "bn", "en"] as Lang[]).map((l) => (
-                  <button
-                    key={l}
-                    onClick={() => void pickLanguage(l)}
-                    className={`block w-full px-4 py-2.5 text-left text-sm hover:bg-secondary ${
-                      language === l ? "text-[color:var(--brand-1)]" : ""
-                    }`}
-                  >
-                    {LANG_LABELS[l]}
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
           <button
             onClick={() => galleryRef.current?.click()}
             className="rounded-full p-2 text-muted-foreground hover:bg-secondary"
             aria-label="Attach photo or video"
           >
             <Images className="size-5" />
-          </button>
-          <button
-            onClick={() => setShowBnKeyboard((v) => !v)}
-            className={`rounded-full p-2 ${showBnKeyboard ? "text-[color:var(--brand-1)]" : "text-muted-foreground"} hover:bg-secondary`}
-            aria-label="Bengali keyboard"
-          >
-            <Keyboard className="size-5" />
           </button>
           <textarea
             value={input}
@@ -682,22 +660,19 @@ export function ChatScreen({
             className="max-h-28 min-h-9 flex-1 resize-none bg-transparent px-1 py-2 text-[15px] outline-none placeholder:text-muted-foreground"
           />
           <button
-            onClick={() => void handleSubmit(`/image ${input.trim()}`)}
-            disabled={!input.trim() || thinking}
-            className="rounded-full p-2 text-muted-foreground hover:bg-secondary disabled:opacity-40"
-            aria-label="Generate image"
+            onClick={() => {
+              if (autoSpeak) {
+                stopSpeaking();
+                setSpeakingId(null);
+              }
+              setAutoSpeak((v) => !v);
+            }}
+            className={`rounded-full p-2 ${autoSpeak ? "text-[color:var(--brand-1)]" : "text-muted-foreground"} hover:bg-secondary`}
+            aria-label={autoSpeak ? "Auto voice on" : "Auto voice off"}
           >
-            <ImageIcon className="size-5" />
+            {autoSpeak ? <Volume2 className="size-5" /> : <VolumeX className="size-5" />}
           </button>
-          <button
-            onClick={() => void handleSubmit(`/video ${input.trim()}`)}
-            disabled={!input.trim() || thinking}
-            className="rounded-full p-2 text-muted-foreground hover:bg-secondary disabled:opacity-40"
-            aria-label="Generate video"
-          >
-            <Film className="size-5" />
-          </button>
-          {input.trim() || attachment ? (
+          {(input.trim() || attachment) && (
             <button
               onClick={() => void handleSubmit()}
               disabled={thinking}
@@ -705,14 +680,6 @@ export function ChatScreen({
               aria-label="Send"
             >
               <Send className="size-4" />
-            </button>
-          ) : (
-            <button
-              onClick={toggleMic}
-              className={`rounded-full p-2 ${listening ? "bg-destructive text-destructive-foreground" : "text-muted-foreground hover:bg-secondary"}`}
-              aria-label="Voice input"
-            >
-              {listening ? <MicOff className="size-5" /> : <Mic className="size-5" />}
             </button>
           )}
         </div>
