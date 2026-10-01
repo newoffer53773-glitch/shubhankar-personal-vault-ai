@@ -121,6 +121,7 @@ export function ChatScreen({
   const [liveMode, setLiveMode] = useState(false);
   const [showBnKeyboard, setShowBnKeyboard] = useState(false);
   const [speakingId, setSpeakingId] = useState<string | null>(null);
+  const [autoSpeak, setAutoSpeak] = useState(true);
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
