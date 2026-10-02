@@ -82,10 +82,26 @@ const TUNING: Record<VoiceStyle, { pitch: number; rate: number; prefer: RegExp }
   professional: { pitch: 1, rate: 0.94, prefer: /google|neural|english/i },
 };
 
+export function cleanForSpeech(text: string): string {
+  return text
+    .replace(/```[\s\S]*?```/g, " ")
+    .replace(/`([^`]*)`/g, "$1")
+    .replace(/!\[([^\]]*)\]\([^)]*\)/g, "$1")
+    .replace(/\[([^\]]+)\]\([^)]*\)/g, "$1")
+    .replace(/^\s{0,3}#{1,6}\s*/gm, "")
+    .replace(/^\s*>\s?/gm, "")
+    .replace(/^\s*([-*+_=]\s*){3,}$/gm, " ")
+    .replace(/^\s*[-*+•]\s+/gm, "")
+    .replace(/^\s*\d+[.)]\s+/gm, "")
+    .replace(/[*_~#|<>\\^]+/g, "")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+}
+
 export function speak(text: string, style: VoiceStyle, lang: "bn" | "en") {
   if (typeof window === "undefined" || !window.speechSynthesis) return false;
   window.speechSynthesis.cancel();
-  const utter = new SpeechSynthesisUtterance(text);
+  const utter = new SpeechSynthesisUtterance(cleanForSpeech(text));
   const tuning = TUNING[style];
   utter.pitch = tuning.pitch;
   utter.rate = tuning.rate;
