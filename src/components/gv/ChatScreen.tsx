@@ -126,9 +126,6 @@ export function ChatScreen({
   const [menuFor, setMenuFor] = useState<string | null>(null);
   const pressTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const [menuFor, setMenuFor] = useState<string | null>(null);
-  const pressTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
