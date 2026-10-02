@@ -545,9 +545,48 @@ export function ChatScreen({
                         className="mb-1 w-full rounded-2xl border border-border"
                       />
                     )}
-                    <p className="whitespace-pre-wrap rounded-3xl bg-primary px-4 py-2.5 text-[15px] text-primary-foreground">
+                    <p
+                      onPointerDown={() => {
+                        clearTimeout(pressTimer.current);
+                        pressTimer.current = setTimeout(() => setMenuFor(message.id), 500);
+                      }}
+                      onPointerUp={() => clearTimeout(pressTimer.current)}
+                      onPointerLeave={() => clearTimeout(pressTimer.current)}
+                      onPointerCancel={() => clearTimeout(pressTimer.current)}
+                      onContextMenu={(e) => {
+                        e.preventDefault();
+                        setMenuFor(message.id);
+                      }}
+                      className="select-none whitespace-pre-wrap rounded-3xl bg-primary px-4 py-2.5 text-[15px] text-primary-foreground [-webkit-touch-callout:none]"
+                    >
                       {message.content}
                     </p>
+                    {menuFor === message.id && (
+                      <div className="mt-1 flex justify-end gap-1">
+                        <button
+                          onClick={() => {
+                            setInput(message.content.replace(/\n📎 .*$/, ""));
+                            setMenuFor(null);
+                            setTimeout(() => {
+                              const el = textareaRef.current;
+                              if (el) {
+                                el.focus();
+                                el.setSelectionRange(el.value.length, el.value.length);
+                              }
+                            }, 0);
+                          }}
+                          className="flex items-center gap-1 rounded-full border border-border bg-card px-3 py-1.5 text-xs hover:bg-secondary"
+                        >
+                          <Pencil className="size-3.5" /> Edit
+                        </button>
+                        <button
+                          onClick={() => setMenuFor(null)}
+                          className="rounded-full border border-border bg-card px-3 py-1.5 text-xs text-muted-foreground hover:bg-secondary"
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    )}
                   </div>
                 </div>
               ) : (
