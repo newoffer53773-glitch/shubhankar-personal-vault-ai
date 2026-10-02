@@ -124,6 +124,9 @@ export function ChatScreen({
   const [speakingId, setSpeakingId] = useState<string | null>(null);
   const [autoSpeak, setAutoSpeak] = useState(true);
   const [menuFor, setMenuFor] = useState<string | null>(null);
+  const pressTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const [menuFor, setMenuFor] = useState<string | null>(null);
   const pressTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
