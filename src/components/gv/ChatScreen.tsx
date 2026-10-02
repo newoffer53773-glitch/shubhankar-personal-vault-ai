@@ -16,6 +16,7 @@ import {
   MicOff,
   Plus,
   Send,
+  Pencil,
   Settings,
   Sparkle,
   SquarePlay,
@@ -122,6 +123,9 @@ export function ChatScreen({
   const [showBnKeyboard, setShowBnKeyboard] = useState(false);
   const [speakingId, setSpeakingId] = useState<string | null>(null);
   const [autoSpeak, setAutoSpeak] = useState(true);
+  const [menuFor, setMenuFor] = useState<string | null>(null);
+  const pressTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -686,6 +690,7 @@ export function ChatScreen({
             <Images className="size-5" />
           </button>
           <textarea
+            ref={textareaRef}
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={(e) => {
